@@ -1,0 +1,26 @@
+# ========================================
+# LARGE DATA FOLDERS - DO NOT COMMIT
+# ========================================
+data/
+data_nuscenes/
+
+# Generated outputs (big folder)
+outputs/
+
+# Virtual environment
+venv/
+.venv/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# VS Code settings
+.vscode/
+
+# Other unnecessary files
+.DS_Store
+Thumbs.db
+*.log
