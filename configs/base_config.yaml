@@ -1,41 +1,7 @@
-project_name: CausalCoop-WM
-seed: 42
-output_dir: outputs
-log_dir: outputs/logs
-figure_dir: outputs/figures
-
-# Device and training settings
-device: cuda
-mixed_precision: true
-batch_size: 4
-num_workers: 4
-lr: 1e-4
-epochs: 20
-val_every: 1
-gradient_accumulation: 2
-
-# Data settings
-dataset: nuscenes
+# Base configuration for CausalCoop-WM project
 data_root: "D:/nuscenes_project/data/nuscenes"
-version: v1.0-mini
-nuscenes_split: mini_train
-
-# World Model settings
-world_model:
-  backbone: vista
-  pretrained_weights: weights/vista.safetensors
-  latent_dim: 64
-  resolution: [256, 512]
-  num_frames: 16
-  fps: 2
-
-# Global evaluation metrics
-metrics:
-  - fid
-  - fvd
-  - collision_rate
-  - counterfactual_consistency
-  - trajectory_rmse
-
-wandb: false
-tensorboard: true
+version: "v1.0-mini"
+output_dir: "outputs"
+device: "cpu"
+seed: 42
+project_name: "CausalCoop-WM"

@@ -1,53 +1,79 @@
 import os
 import pickle
-import networkx as nx
 import numpy as np
+import networkx as nx
 
-print("CausalCoop-WM Build Causal Graph")
-print("==================================================")
+TRAJECTORY_DIR = 'outputs/trajectories'
+OUTPUT_DIR     = 'outputs/causal_graphs'
+GRAPH_PATH     = os.path.join(OUTPUT_DIR, 'causal_graph.gpickle')
+MAX_DISTANCE   = 20.0
 
-data_root = r"D:\nuscenes_project\data\nuscenes"
-trajectory_dir = "outputs/trajectories"
-output_dir = "outputs/causal_graphs"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Load all trajectories
-trajectory_files = [f for f in os.listdir(trajectory_dir) if f.endswith(".pkl")]
-all_trajectories = {}
+traj_files = [f for f in os.listdir(TRAJECTORY_DIR) if f.endswith('.pkl')]
 
-for tf in trajectory_files:
-    with open(os.path.join(trajectory_dir, tf), "rb") as f:
-        traj = pickle.load(f)
-    instance_token = tf.replace("traj_", "").replace(".pkl", "")
-    all_trajectories[instance_token] = traj
+if len(traj_files) == 0:
+    print("No trajectory files found. Run 03_extract_trajectories.py first.")
+    exit()
 
-print("Loaded " + str(len(all_trajectories)) + " agent trajectories")
+with open(os.path.join(TRAJECTORY_DIR, traj_files[0]), 'rb') as f:
+    trajectories = pickle.load(f)
 
-# Build causal graph
-G = nx.DiGraph()
+G      = nx.DiGraph()
+agents = list(trajectories.keys())
 
-for instance_token, traj in all_trajectories.items():
-    G.add_node(instance_token, 
-               category=traj[0]["category"], 
-               frames=len(traj))
+for inst_token, traj in trajectories.items():
+    G.add_node(
+        inst_token,
+        category=traj[0]['category'],
+        frames=len(traj)
+    )
 
-# Add directed edges based on potential causal influence (proximity + velocity)
-for i1, traj1 in all_trajectories.items():
-    for i2, traj2 in all_trajectories.items():
-        if i1 == i2:
+print(f"Building causal graph for {len(agents)} agents...")
+
+for i in range(len(agents)):
+    for j in range(len(agents)):
+        if i == j:
             continue
-        for t in range(min(len(traj1), len(traj2))):
-            pos1 = np.array(traj1[t]["translation"][:2])
-            pos2 = np.array(traj2[t]["translation"][:2])
-            dist = np.linalg.norm(pos1 - pos2)
-            if dist < 15.0:  # within 15m causal influence range
-                vel1 = np.array(traj1[t].get("velocity", [0,0])) if "velocity" in traj1[t] else np.zeros(2)
-                vel2 = np.array(traj2[t].get("velocity", [0,0])) if "velocity" in traj2[t] else np.zeros(2)
-                if np.dot(vel1, vel2) < 0:  # opposing or following motion
-                    G.add_edge(i1, i2, weight=1.0 / (dist + 1e-6), time=t)
-                    break
 
-nx.write_gpickle(G, os.path.join(output_dir, "causal_graph.gpickle"))
-print("Causal graph built with " + str(G.number_of_nodes()) + " nodes and " + str(G.number_of_edges()) + " edges")
-print("Graph saved to outputs/causal_graphs/causal_graph.gpickle")
-print("Causal graph construction completed.")
+        traj_i  = trajectories[agents[i]]
+        traj_j  = trajectories[agents[j]]
+        min_len = min(len(traj_i), len(traj_j))
+
+        if min_len == 0:
+            continue
+
+        distances = []
+        for k in range(min_len):
+            dx = traj_i[k]['x'] - traj_j[k]['x']
+            dy = traj_i[k]['y'] - traj_j[k]['y']
+            distances.append(np.sqrt(dx**2 + dy**2))
+
+        avg_dist = np.mean(distances)
+        min_dist = np.min(distances)
+
+        if min_dist < MAX_DISTANCE:
+            weight = 1.0 / (min_dist + 1e-6)
+            G.add_edge(
+                agents[i], agents[j],
+                weight=weight,
+                avg_distance=float(avg_dist),
+                min_distance=float(min_dist)
+            )
+
+import pickle as pkl
+with open(GRAPH_PATH, 'wb') as f:
+    pkl.dump(G, f)
+
+print(f"Causal graph saved : {GRAPH_PATH}")
+print(f"  Nodes            : {G.number_of_nodes()}")
+print(f"  Edges            : {G.number_of_edges()}")
+print()
+
+print(f"{'Node':<12} {'Category':<30} {'In-degree':<12} {'Out-degree'}")
+print('-' * 65)
+for node in list(G.nodes())[:10]:
+    cat     = G.nodes[node].get('category', 'unknown')
+    in_deg  = G.in_degree(node)
+    out_deg = G.out_degree(node)
+    print(f"{node[:10]:<12} {cat:<30} {in_deg:<12} {out_deg}")

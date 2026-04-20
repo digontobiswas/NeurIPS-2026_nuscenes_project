@@ -1,45 +1,60 @@
 import os
 import torch
 import numpy as np
-from torchmetrics.image.fid import FrechetInceptionDistance
 
-print("CausalCoop-WM FID FVD Compute")
-print("==================================================")
+SEQ_PATH    = 'outputs/world_model_data/sample_sequence_0.pt'
+FUTURE_PATH = 'outputs/world_model_data/future_prediction.pt'
+OUTPUT_DIR  = 'outputs/evaluation'
 
-world_model_dir = "outputs/world_model_data"
-output_dir = "outputs/evaluation"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-sequence_path = os.path.join(world_model_dir, "sample_sequence_0.pt")
-future_path = os.path.join(world_model_dir, "future_prediction.pt")
+if not os.path.exists(SEQ_PATH) or not os.path.exists(FUTURE_PATH):
+    print("World model output files not found.")
+    print("Run 03_world_model files first.")
+    exit()
 
-if os.path.exists(sequence_path) and os.path.exists(future_path):
-    real_sequence = torch.load(sequence_path)
-    predicted_future = torch.load(future_path)
-    
-    num_frames = min(len(real_sequence), len(predicted_future))
-    real_frames = torch.rand(1, num_frames, 3, 256, 512)
-    gen_frames = torch.rand(1, num_frames, 3, 256, 512)
-    
-    fid = FrechetInceptionDistance(feature=2048)
-    fid.update(real_frames, real=True)
-    fid.update(gen_frames, real=False)
-    fid_score = fid.compute().item()
-    
-    fvd_score = 0.0
-    print("Note: FVD skipped (placeholder value 0.0 used)")
-    
-    results = {
-        "fid": fid_score,
-        "fvd": fvd_score,
-        "num_frames_evaluated": num_frames
-    }
-    
-    torch.save(results, os.path.join(output_dir, "fid_fvd_results.pt"))
-    print("FID: " + str(round(fid_score, 4)))
-    print("FVD: " + str(round(fvd_score, 4)))
-    print("Metrics saved to outputs/evaluation/fid_fvd_results.pt")
-else:
-    print("Required sequences not found. Run world model scripts first.")
+real_seq = torch.load(SEQ_PATH,    weights_only=False)
+pred_seq = torch.load(FUTURE_PATH, weights_only=False)
 
-print("FID FVD computation completed.")
+print(f"Real sequence shape : {real_seq.shape}")
+print(f"Pred sequence shape : {pred_seq.shape}")
+print()
+
+
+def compute_proxy_fid(real, pred):
+    """Proxy FID using feature mean difference."""
+    real_f  = real.reshape(real.shape[0], -1).float()
+    pred_f  = pred.reshape(pred.shape[0], -1).float()
+    r_mean  = real_f.mean(dim=0)
+    p_mean  = pred_f.mean(dim=0)
+    fid     = float(torch.mean((r_mean - p_mean) ** 2))
+    return fid
+
+
+def compute_proxy_fvd(real, pred):
+    """Proxy FVD using temporal difference."""
+    real_f = real.reshape(real.shape[0], -1).float()
+    pred_f = pred.reshape(pred.shape[0], -1).float()
+    min_n  = min(real_f.shape[0], pred_f.shape[0])
+    fvd    = float(torch.mean(torch.abs(real_f[:min_n] - pred_f[:min_n])))
+    return fvd
+
+
+fid = compute_proxy_fid(real_seq, pred_seq)
+fvd = compute_proxy_fvd(real_seq, pred_seq)
+
+print('=' * 40)
+print('EVALUATION RESULTS')
+print('=' * 40)
+print(f"Proxy FID : {fid:.6f}  (lower is better)")
+print(f"Proxy FVD : {fvd:.6f}  (lower is better)")
+print()
+print("Note: These are proxy metrics for development.")
+print("For paper-quality FID/FVD use pytorch-fid library.")
+
+import pickle
+results = {'fid': fid, 'fvd': fvd}
+out_path = os.path.join(OUTPUT_DIR, 'fid_fvd_results.pkl')
+with open(out_path, 'wb') as f:
+    pickle.dump(results, f)
+print(f"\nResults saved: {out_path}")

@@ -1,58 +1,103 @@
 import os
+import pickle
 import numpy as np
 import torch
-from nuscenes.nuscenes import NuScenes
-from nuscenes.utils.data_classes import LidarPointCloud
-from PIL import Image
+from torch.utils.data import Dataset, DataLoader
 
-print("CausalCoop-WM Data Loader")
-print("==================================================")
+DATAROOT   = 'D:/nuscenes_project/data/nuscenes'
+OUTPUT_DIR = 'outputs/world_model_data'
 
-data_root = r"D:\nuscenes_project\data\nuscenes"
-version = "v1.0-mini"
-nusc = NuScenes(version=version, dataroot=data_root, verbose=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-output_dir = "outputs/world_model_data"
-os.makedirs(output_dir, exist_ok=True)
 
-scene_index = 0
-scene = nusc.scene[scene_index]
-sample_token = scene["first_sample_token"]
+class NuScenesSequenceDataset(Dataset):
+    """
+    Simple dataset that loads trajectory sequences
+    from saved pkl files for world model training.
+    """
 
-sequence_length = 16
-frame_data = []
+    def __init__(self, trajectory_dir, seq_len=10):
+        self.seq_len = seq_len
+        self.samples = []
 
-for i in range(sequence_length):
-    if sample_token == "":
-        break
-    sample = nusc.get("sample", sample_token)
-    
-    # Camera front image
-    cam_token = sample["data"]["CAM_FRONT"]
-    cam_data = nusc.get("sample_data", cam_token)
-    img = Image.open(cam_data["filename"]).resize((512, 256))
-    img_array = np.array(img) / 255.0
-    
-    # LiDAR point cloud
-    lidar_token = sample["data"]["LIDAR_TOP"]
-    lidar_data = nusc.get("sample_data", lidar_token)
-    points = np.fromfile(lidar_data["filename"], dtype=np.float32).reshape(-1, 5)[:, :3]
-    
-    # Ego pose
-    ego_pose = nusc.get("ego_pose", cam_data["ego_pose_token"])
-    
-    frame_data.append({
-        "frame_idx": i,
-        "image": img_array,
-        "lidar_points": points,
-        "ego_pose": ego_pose["translation"],
-        "sample_token": sample_token
-    })
-    
-    sample_token = sample["next"]
+        traj_files = [
+            f for f in os.listdir(trajectory_dir)
+            if f.endswith('.pkl')
+        ]
 
-# Save sequence
-torch.save(frame_data, os.path.join(output_dir, "sample_sequence_0.pt"))
-print("Data sequence loaded with " + str(len(frame_data)) + " frames")
-print("Sequence saved to outputs/world_model_data/sample_sequence_0.pt")
-print("Data loader completed.")
+        for fname in traj_files:
+            path = os.path.join(trajectory_dir, fname)
+            with open(path, 'rb') as f:
+                trajectories = pickle.load(f)
+
+            for inst_token, traj in trajectories.items():
+                if len(traj) >= seq_len:
+                    for start in range(len(traj) - seq_len + 1):
+                        window = traj[start:start + seq_len]
+                        self.samples.append({
+                            'instance': inst_token,
+                            'sequence': window,
+                            'category': traj[0]['category']
+                        })
+
+        print(f"Dataset loaded: {len(self.samples)} sequences")
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        item = self.samples[idx]
+        seq  = item['sequence']
+
+        positions = torch.tensor(
+            [[p['x'], p['y'], p['z']] for p in seq],
+            dtype=torch.float32
+        )
+
+        if len(positions) > 1:
+            velocities = torch.diff(positions, dim=0)
+            velocities = torch.cat(
+                [velocities[:1], velocities], dim=0
+            )
+        else:
+            velocities = torch.zeros_like(positions)
+
+        return {
+            'positions' : positions,
+            'velocities': velocities,
+            'category'  : item['category'],
+            'instance'  : item['instance']
+        }
+
+
+if __name__ == '__main__':
+    trajectory_dir = 'outputs/trajectories'
+
+    if not os.path.exists(trajectory_dir) or \
+       len(os.listdir(trajectory_dir)) == 0:
+        print("No trajectories found.")
+        print("Run 01_exploration/03_extract_trajectories.py first.")
+        exit()
+
+    dataset    = NuScenesSequenceDataset(trajectory_dir, seq_len=5)
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+
+    print()
+    print('DATALOADER TEST:')
+    print('-' * 40)
+    for batch_idx, batch in enumerate(dataloader):
+        print(f"Batch {batch_idx}")
+        print(f"  Positions shape  : {batch['positions'].shape}")
+        print(f"  Velocities shape : {batch['velocities'].shape}")
+        print(f"  Categories       : {batch['category']}")
+        if batch_idx >= 2:
+            break
+
+    out_path = os.path.join(OUTPUT_DIR, 'dataset_info.pkl')
+    info = {
+        'total_sequences': len(dataset),
+        'seq_len'        : 5
+    }
+    with open(out_path, 'wb') as f:
+        pickle.dump(info, f)
+    print(f"\nDataset info saved: {out_path}")

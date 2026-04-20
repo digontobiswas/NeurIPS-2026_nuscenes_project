@@ -1,25 +1,12 @@
-# Causal Graph Specific Configuration
-causal:
-  enabled: true
-  gnn_layers: 3
-  hidden_dim: 128
-  dropout: 0.1
-  interventional_loss_weight: 0.3
-  proximity_threshold: 15.0
-  edge_weight_scale: 1.0
-  
-  # Intent inference settings
-  intent_inference:
-    speed_change_threshold: 0.5
-    direction_change_threshold: 0.3
-  
-  # Counterfactual query settings
-  counterfactual:
-    enabled: true
-    num_interventions: 5
-    intervention_types: ["no_brake", "no_turn", "speed_change"]
-  
-  # Graph saving
-  output_graph: outputs/causal_graphs/causal_graph.gpickle
-  output_intents: outputs/causal_graphs/agent_intents.pkl
-  output_counterfactual: outputs/causal_graphs/counterfactual_results.pkl
+# V2X cooperative configuration
+v2x:
+  num_agents: 5
+  bandwidth_limit: 1000
+  fused_belief: "outputs/v2x_cooperative/fused_belief.pt"
+  output_dir: "outputs/v2x_cooperative"
+  latent_dim: 128
+  compression_ratio: 0.1
+  communication:
+    delay_ms: 100
+    packet_loss: 0.05
+    bandwidth_kbps: 1000

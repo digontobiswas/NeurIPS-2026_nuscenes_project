@@ -1,35 +1,79 @@
 import os
+import pickle
 import numpy as np
 import matplotlib.pyplot as plt
-import pickle
+import matplotlib.cm as cm
 
-print("CausalCoop-WM Plot Trajectories")
-print("==================================================")
+TRAJECTORY_DIR = 'outputs/trajectories'
+OUTPUT_DIR     = 'outputs/figures'
 
-trajectory_dir = "outputs/trajectories"
-output_dir = "outputs/figures"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-trajectory_files = [f for f in os.listdir(trajectory_dir) if f.endswith(".pkl")]
+traj_files = [
+    f for f in os.listdir(TRAJECTORY_DIR)
+    if f.endswith('.pkl')
+]
 
-plt.figure(figsize=(10, 8))
-colors = plt.cm.tab10(np.linspace(0, 1, min(10, len(trajectory_files))))
+if len(traj_files) == 0:
+    print("No trajectory files found.")
+    exit()
 
-for idx, tf in enumerate(trajectory_files[:10]):
-    with open(os.path.join(trajectory_dir, tf), "rb") as f:
-        traj = pickle.load(f)
-    positions = np.array([p["translation"][:2] for p in traj])
-    plt.plot(positions[:, 0], positions[:, 1], color=colors[idx], linewidth=2, label="Agent " + tf.replace("traj_", "").replace(".pkl", "")[:8])
+with open(os.path.join(TRAJECTORY_DIR, traj_files[0]), 'rb') as f:
+    trajectories = pickle.load(f)
 
-plt.title("Agent Trajectories (Top-Down View)")
-plt.xlabel("X (m)")
-plt.ylabel("Y (m)")
-plt.axis("equal")
-plt.grid(True, alpha=0.3)
-plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-out_path = os.path.join(output_dir, "trajectories_plot.png")
-plt.savefig(out_path, dpi=300, bbox_inches="tight")
+fig, axes = plt.subplots(1, 2, figsize=(18, 8))
+fig.suptitle('Agent Trajectories — nuScenes Scene 0', fontsize=14)
+
+colors = cm.tab20(np.linspace(0, 1, len(trajectories)))
+
+for (inst_token, traj), color in zip(trajectories.items(), colors):
+    xs = [p['x'] for p in traj]
+    ys = [p['y'] for p in traj]
+    cat = traj[0]['category'].split('.')[-1]
+
+    axes[0].plot(xs, ys, '-', color=color,
+                 linewidth=1.5, alpha=0.8)
+    axes[0].plot(xs[0], ys[0], 's', color=color, markersize=5)
+    axes[0].plot(xs[-1], ys[-1], '^', color=color, markersize=5)
+
+axes[0].set_title('All Agent Trajectories\n(■ start  ▲ end)')
+axes[0].set_xlabel('X position (m)')
+axes[0].set_ylabel('Y position (m)')
+axes[0].set_aspect('equal')
+axes[0].grid(True, alpha=0.3)
+
+cat_groups = {}
+for inst_token, traj in trajectories.items():
+    cat = traj[0]['category'].split('.')[0]
+    if cat not in cat_groups:
+        cat_groups[cat] = {'xs': [], 'ys': []}
+    cat_groups[cat]['xs'].extend([p['x'] for p in traj])
+    cat_groups[cat]['ys'].extend([p['y'] for p in traj])
+
+cat_colors = {
+    'vehicle': '#4C72B0',
+    'human'  : '#DD8452',
+    'movable': '#55A868',
+    'static' : '#C44E52'
+}
+
+for cat, data in cat_groups.items():
+    color = cat_colors.get(cat, '#888888')
+    axes[1].scatter(
+        data['xs'], data['ys'],
+        c=color, s=3, alpha=0.5, label=cat
+    )
+
+axes[1].set_title('Agent Positions by Category')
+axes[1].set_xlabel('X position (m)')
+axes[1].set_ylabel('Y position (m)')
+axes[1].set_aspect('equal')
+axes[1].legend(loc='upper right', fontsize=9)
+axes[1].grid(True, alpha=0.3)
+
+plt.tight_layout()
+out_path = os.path.join(OUTPUT_DIR, 'trajectories_full.png')
+plt.savefig(out_path, dpi=150, bbox_inches='tight')
+print(f"Saved: {out_path}")
 plt.show()
-
-print("Trajectories plot saved to " + out_path)
-print("Trajectory plotting completed.")
+plt.close()

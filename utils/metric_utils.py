@@ -1,61 +1,86 @@
-import os
-import torch
 import numpy as np
-from torchmetrics.image.fid import FrechetInceptionDistance
 
-def compute_fid_fvd(real_sequence, gen_sequence):
-    print("Computing FID and FVD")
-    num_frames = min(len(real_sequence), len(gen_sequence))
-    
-    # Dummy tensors for metric calculation (placeholder)
-    real_frames = torch.rand(1, num_frames, 3, 256, 512)
-    gen_frames = torch.rand(1, num_frames, 3, 256, 512)
-    
-    # FID (this works reliably)
-    fid = FrechetInceptionDistance(feature=2048)
-    fid.update(real_frames, real=True)
-    fid.update(gen_frames, real=False)
-    fid_score = fid.compute().item()
-    
-    # FVD skipped due to import issues - using placeholder
-    fvd_score = 0.0
-    print("Note: FVD calculation skipped (placeholder value 0.0 used). Will be enabled later with full Vista integration.")
-    
-    return {
-        "fid": fid_score,
-        "fvd": fvd_score,
-        "num_frames": num_frames
-    }
+
+def compute_fid_fvd(real_sequence, predicted_sequence):
+    """
+    Compute proxy FID and FVD scores.
+    For full computation use pytorch-fid library.
+    This is a simplified proxy for development.
+    """
+    if hasattr(real_sequence, 'numpy'):
+        real = real_sequence.numpy()
+    else:
+        real = np.array(real_sequence)
+
+    if hasattr(predicted_sequence, 'numpy'):
+        pred = predicted_sequence.numpy()
+    else:
+        pred = np.array(predicted_sequence)
+
+    # Proxy FID — mean squared difference of feature means
+    real_flat = real.reshape(real.shape[0], -1).astype(float)
+    pred_flat = pred.reshape(pred.shape[0], -1).astype(float)
+
+    real_mean = np.mean(real_flat, axis=0)
+    pred_mean = np.mean(pred_flat, axis=0)
+
+    fid = float(np.mean((real_mean - pred_mean) ** 2))
+
+    # Proxy FVD — temporal consistency score
+    fvd = float(np.mean(np.abs(real_flat - pred_flat)))
+
+    return {'fid': fid, 'fvd': fvd}
+
 
 def compute_trajectory_difference(gt_positions, pred_positions):
-    print("Computing trajectory difference")
-    gt_pos = np.array(gt_positions)
-    pred_pos = np.array(pred_positions)
-    
-    diff = np.mean(np.linalg.norm(gt_pos - pred_pos, axis=1))
-    rmse = np.sqrt(np.mean((gt_pos - pred_pos)**2))
-    
+    """
+    Compute L2 trajectory difference (RMSE) between
+    ground truth and predicted positions.
+    gt_positions  : list of [x, y] pairs
+    pred_positions: list of [x, y] pairs
+    """
+    gt   = np.array(gt_positions,   dtype=float)
+    pred = np.array(pred_positions, dtype=float)
+
+    min_len = min(len(gt), len(pred))
+    gt      = gt[:min_len]
+    pred    = pred[:min_len]
+
+    diff = gt - pred
+    l2   = np.sqrt(np.sum(diff ** 2, axis=1))
+    rmse = float(np.sqrt(np.mean(l2 ** 2)))
+    mae  = float(np.mean(l2))
+
     return {
-        "mean_difference": float(diff),
-        "rmse": float(rmse),
-        "num_frames": len(pred_positions)
+        'rmse'       : rmse,
+        'mae'        : mae,
+        'per_step_l2': l2.tolist()
     }
 
-def compute_reward(predicted_positions):
-    print("Computing reward")
-    collision_penalty = 0.0
-    progress_reward = 0.0
-    
-    for i in range(1, len(predicted_positions)):
-        dist_moved = np.linalg.norm(np.array(predicted_positions[i]) - np.array(predicted_positions[i-1]))
-        progress_reward += dist_moved * 0.1
-        if dist_moved < 0.5:
-            collision_penalty -= 5.0
-    
-    total_reward = progress_reward + collision_penalty
-    
+
+def compute_reward(pred_positions, safe_distance=5.0):
+    """
+    Compute a simple reward based on predicted trajectory.
+    Higher reward = safer and smoother trajectory.
+    """
+    positions = np.array(pred_positions, dtype=float)
+
+    if len(positions) < 2:
+        return {'total_reward': 0.0, 'smoothness': 0.0, 'safety': 0.0}
+
+    # Smoothness reward — penalize sharp direction changes
+    diffs      = np.diff(positions, axis=0)
+    speeds     = np.sqrt(np.sum(diffs ** 2, axis=1))
+    smoothness = float(1.0 / (1.0 + np.std(speeds)))
+
+    # Safety reward — based on distance from origin
+    distances  = np.sqrt(np.sum(positions ** 2, axis=1))
+    safety     = float(np.mean(np.clip(distances / safe_distance, 0, 1)))
+
+    total_reward = 0.5 * smoothness + 0.5 * safety
+
     return {
-        "total_reward": float(total_reward),
-        "progress_reward": float(progress_reward),
-        "collision_penalty": float(collision_penalty)
+        'total_reward': total_reward,
+        'smoothness'  : smoothness,
+        'safety'      : safety
     }

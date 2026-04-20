@@ -1,56 +1,84 @@
 import os
 import pickle
 import networkx as nx
-import numpy as np
 
-print("CausalCoop-WM Counterfactual Query")
-print("==================================================")
+GRAPH_PATH  = 'outputs/causal_graphs/causal_graph.gpickle'
+INTENT_PATH = 'outputs/causal_graphs/agent_intents.pkl'
+OUTPUT_PATH = 'outputs/causal_graphs/counterfactual_results.pkl'
 
-graph_path = "outputs/causal_graphs/causal_graph.gpickle"
-intent_path = "outputs/causal_graphs/agent_intents.pkl"
+if not os.path.exists(GRAPH_PATH):
+    print("Causal graph not found. Run 01_build_causal_graph.py first.")
+    exit()
 
-if not os.path.exists(graph_path) or not os.path.exists(intent_path):
-    print("Causal graph or intents not found. Run previous scripts first.")
-else:
-    G = nx.read_gpickle(graph_path)
-    with open(intent_path, "rb") as f:
-        intent_data = pickle.load(f)
-    
-    # Example counterfactual: "What if ego agent did not brake?"
-    ego_token = list(G.nodes())[0]  # first agent as ego
-    print("Running counterfactual on ego agent: " + ego_token[:8])
-    
-    # Original path length to a target
-    targets = list(G.successors(ego_token))
-    if targets:
-        original_influence = len(nx.shortest_path(G, ego_token, targets[0]))
-    else:
-        original_influence = 0
-    
-    # Simulate intervention: remove braking edge
-    G_counter = G.copy()
-    for u, v, data in list(G_counter.edges(data=True)):
-        if u == ego_token and intent_data.get(u, {}).get("most_common_intent") == "braking":
-            G_counter.remove_edge(u, v)
-    
-    # New influence
-    if targets:
-        try:
-            new_influence = len(nx.shortest_path(G_counter, ego_token, targets[0]))
-        except:
-            new_influence = 0
-    else:
-        new_influence = 0
-    
-    print("Original causal influence length: " + str(original_influence))
-    print("Counterfactual (no brake) influence length: " + str(new_influence))
-    print("Change in influence: " + str(new_influence - original_influence))
-    
-    with open("outputs/causal_graphs/counterfactual_results.pkl", "wb") as f:
-        pickle.dump({
-            "ego": ego_token,
-            "original_influence": original_influence,
-            "counterfactual_influence": new_influence
-        }, f)
-    
-    print("Counterfactual query completed and saved.")
+if not os.path.exists(INTENT_PATH):
+    print("Intent data not found. Run 02_agent_intent_inference.py first.")
+    exit()
+
+import pickle as pkl
+with open(GRAPH_PATH, 'rb') as f:
+    G = pkl.load(f)
+
+with open(INTENT_PATH, 'rb') as f:
+    intent_data = pickle.load(f)
+
+print(f"Graph loaded  : {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+print(f"Agents loaded : {len(intent_data)}")
+print()
+
+nodes = list(G.nodes())
+
+if len(nodes) == 0:
+    print("Graph has no nodes.")
+    exit()
+
+query_agent      = nodes[0]
+original_intent  = intent_data.get(query_agent, {}).get('intent', 'unknown')
+original_category= intent_data.get(query_agent, {}).get('category', 'unknown')
+
+print(f"Query agent   : {query_agent[:12]}...")
+print(f"Category      : {original_category}")
+print(f"Original intent: {original_intent}")
+print()
+
+counterfactual_intents = [
+    'moving_straight',
+    'turning_left',
+    'turning_right',
+    'stopping',
+    'stationary'
+]
+
+results = {}
+
+print('COUNTERFACTUAL ANALYSIS:')
+print('=' * 60)
+
+for cf_intent in counterfactual_intents:
+    if cf_intent == original_intent:
+        continue
+
+    neighbors      = list(G.successors(query_agent))
+    affected       = len(neighbors)
+    risk_change    = round(affected * 0.15, 3)
+    outcome        = 'increased risk' if risk_change > 0.3 else 'safe'
+
+    results[cf_intent] = {
+        'query_agent'    : query_agent,
+        'original_intent': original_intent,
+        'counterfactual' : cf_intent,
+        'affected_agents': affected,
+        'risk_change'    : risk_change,
+        'outcome'        : outcome
+    }
+
+    print(f"  If intent changes: '{original_intent}' → '{cf_intent}'")
+    print(f"    Affected agents : {affected}")
+    print(f"    Risk change     : {risk_change}")
+    print(f"    Outcome         : {outcome}")
+    print()
+
+os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
+with open(OUTPUT_PATH, 'wb') as f:
+    pickle.dump(results, f)
+
+print(f"Counterfactual results saved: {OUTPUT_PATH}")

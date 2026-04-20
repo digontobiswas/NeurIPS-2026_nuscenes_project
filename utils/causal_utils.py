@@ -1,140 +1,224 @@
 import os
 import pickle
-import networkx as nx
 import numpy as np
+import networkx as nx
+from collections import defaultdict
 
-def build_causal_graph(trajectory_dir, output_path=None):
-    print("Building causal graph from trajectories")
-    trajectory_files = [f for f in os.listdir(trajectory_dir) if f.endswith(".pkl")]
-    all_trajectories = {}
-    
-    for tf in trajectory_files:
-        with open(os.path.join(trajectory_dir, tf), "rb") as f:
-            traj = pickle.load(f)
-        instance_token = tf.replace("traj_", "").replace(".pkl", "")
-        all_trajectories[instance_token] = traj
-    
-    print(f"Loaded {len(all_trajectories)} agent trajectories")
 
-    G = nx.DiGraph()
-    for instance_token, traj in all_trajectories.items():
-        G.add_node(instance_token, category=traj[0]["category"], frames=len(traj))
+def save_graph(G, path):
+    """Save networkx graph using pickle."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(G, f)
 
-    print(f"Added {G.number_of_nodes()} nodes to the graph")
 
-    # Add edges
-    edge_count = 0
-    for i1, traj1 in all_trajectories.items():
-        for i2, traj2 in all_trajectories.items():
-            if i1 == i2:
+def load_graph(path):
+    """Load networkx graph using pickle."""
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
+def build_causal_graph(trajectory_dir, output_path):
+    """
+    Build a causal graph over agents from trajectory data.
+    Nodes = agents, Edges = spatial proximity + interaction.
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    traj_files = [
+        f for f in os.listdir(trajectory_dir)
+        if f.endswith('.pkl')
+    ]
+
+    if len(traj_files) == 0:
+        print("No trajectory files found. Run extraction first.")
+        G = nx.DiGraph()
+        save_graph(G, output_path)
+        return G
+
+    traj_path = os.path.join(trajectory_dir, traj_files[0])
+    with open(traj_path, 'rb') as f:
+        trajectories = pickle.load(f)
+
+    G      = nx.DiGraph()
+    agents = list(trajectories.keys())
+
+    for inst_token, traj in trajectories.items():
+        G.add_node(
+            inst_token,
+            category=traj[0]['category'],
+            frames=len(traj)
+        )
+
+    max_distance = 20.0
+    print(f"Building causal graph for {len(agents)} agents...")
+
+    for i in range(len(agents)):
+        for j in range(len(agents)):
+            if i == j:
                 continue
-            for t in range(min(len(traj1), len(traj2))):
-                pos1 = np.array(traj1[t]["translation"][:2])
-                pos2 = np.array(traj2[t]["translation"][:2])
-                dist = np.linalg.norm(pos1 - pos2)
-                if dist < 15.0:
-                    vel1 = np.array(traj1[t].get("velocity", [0,0]))
-                    vel2 = np.array(traj2[t].get("velocity", [0,0]))
-                    if np.dot(vel1, vel2) < 0:
-                        G.add_edge(i1, i2, weight=1.0 / (dist + 1e-6), time=t)
-                        edge_count += 1
-                        break
 
-    print(f"Added {edge_count} causal edges")
+            traj_i  = trajectories[agents[i]]
+            traj_j  = trajectories[agents[j]]
+            min_len = min(len(traj_i), len(traj_j))
 
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "wb") as f:
-            pickle.dump(G, f)
-        print("Causal graph saved to " + output_path)
-    
+            if min_len == 0:
+                continue
+
+            distances = []
+            for k in range(min_len):
+                dx = traj_i[k]['x'] - traj_j[k]['x']
+                dy = traj_i[k]['y'] - traj_j[k]['y']
+                distances.append(np.sqrt(dx**2 + dy**2))
+
+            avg_dist = np.mean(distances)
+            min_dist = np.min(distances)
+
+            if min_dist < max_distance:
+                weight = 1.0 / (min_dist + 1e-6)
+                G.add_edge(
+                    agents[i], agents[j],
+                    weight=weight,
+                    avg_distance=float(avg_dist),
+                    min_distance=float(min_dist)
+                )
+
+    save_graph(G, output_path)
+
+    print(f"Causal graph saved : {output_path}")
+    print(f"  Nodes            : {G.number_of_nodes()}")
+    print(f"  Edges            : {G.number_of_edges()}")
     return G
 
-def infer_agent_intent(trajectory_dir, output_path=None):
-    print("Inferring agent intents")
-    trajectory_files = [f for f in os.listdir(trajectory_dir) if f.endswith(".pkl")]
+
+def infer_agent_intent(trajectory_dir, output_path):
+    """
+    Infer intent for each agent based on trajectory pattern.
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    traj_files = [
+        f for f in os.listdir(trajectory_dir)
+        if f.endswith('.pkl')
+    ]
+
+    if len(traj_files) == 0:
+        print("No trajectory files found.")
+        return {}
+
+    traj_path = os.path.join(trajectory_dir, traj_files[0])
+    with open(traj_path, 'rb') as f:
+        trajectories = pickle.load(f)
+
     intent_data = {}
-    
-    for tf in trajectory_files:
-        with open(os.path.join(trajectory_dir, tf), "rb") as f:
-            traj = pickle.load(f)
-        instance_token = tf.replace("traj_", "").replace(".pkl", "")
-        
-        intents = []
-        for i in range(1, len(traj)):
-            prev_pos = np.array(traj[i-1]["translation"][:2])
-            curr_pos = np.array(traj[i]["translation"][:2])
-            prev_vel = np.linalg.norm(np.array(traj[i-1].get("velocity", [0,0])))
-            curr_vel = np.linalg.norm(np.array(traj[i].get("velocity", [0,0])))
-            
-            speed_change = curr_vel - prev_vel
-            direction_change = np.arctan2(curr_pos[1] - prev_pos[1], curr_pos[0] - prev_pos[0])
-            
-            if speed_change < -0.5:
-                intent = "braking"
-            elif speed_change > 0.5:
-                intent = "accelerating"
-            elif abs(direction_change) > 0.3:
-                intent = "turning"
+
+    for inst_token, traj in trajectories.items():
+        if len(traj) < 2:
+            intent = 'stationary'
+        else:
+            dx_total = traj[-1]['x'] - traj[0]['x']
+            dy_total = traj[-1]['y'] - traj[0]['y']
+            dist     = np.sqrt(dx_total**2 + dy_total**2)
+
+            if dist < 1.0:
+                intent = 'stationary'
+            elif abs(dy_total) < 2.0:
+                intent = 'moving_straight'
+            elif dy_total > 2.0:
+                intent = 'turning_left'
+            elif dy_total < -2.0:
+                intent = 'turning_right'
             else:
-                intent = "cruising"
-            intents.append(intent)
-        
-        intent_data[instance_token] = {
-            "category": traj[0]["category"],
-            "intents": intents,
-            "most_common_intent": max(set(intents), key=intents.count) if intents else "unknown"
+                intent = 'stopping'
+
+        intent_data[inst_token] = {
+            'intent'  : intent,
+            'category': traj[0]['category'],
+            'frames'  : len(traj)
         }
-    
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "wb") as f:
-            pickle.dump(intent_data, f)
-        print("Agent intents saved to " + output_path)
+
+    with open(output_path, 'wb') as f:
+        pickle.dump(intent_data, f)
+
+    print(f"Agent intents saved: {output_path}")
+
+    from collections import Counter
+    intents = [v['intent'] for v in intent_data.values()]
+    counts  = Counter(intents)
+    for intent, count in counts.items():
+        print(f"  {intent:<25} {count} agents")
+
     return intent_data
 
-def run_counterfactual_query(graph_path, intent_path, output_path=None):
-    print("Running counterfactual query")
-    if not os.path.exists(graph_path) or not os.path.exists(intent_path):
-        print("Graph or intent files not found")
-        return None
-    
-    with open(graph_path, "rb") as f:
-        G = pickle.load(f)
-    
-    print(f"Loaded graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} edges")
-    
-    if G.number_of_nodes() == 0:
-        print("WARNING: Graph has no nodes. Skipping counterfactual query.")
-        return None
-    
-    with open(intent_path, "rb") as f:
+
+def run_counterfactual_query(graph_path, intent_path, output_path):
+    """
+    Run a counterfactual query on the causal graph.
+    """
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    if not os.path.exists(graph_path):
+        print("Causal graph not found. Run build_causal_graph first.")
+        return {}
+
+    if not os.path.exists(intent_path):
+        print("Intent data not found. Run infer_agent_intent first.")
+        return {}
+
+    G = load_graph(graph_path)
+
+    with open(intent_path, 'rb') as f:
         intent_data = pickle.load(f)
-    
-    ego_token = list(G.nodes())[0]
-    print(f"Using agent {ego_token[:8]} as ego for counterfactual")
-    
-    targets = list(G.successors(ego_token))
-    
-    original_influence = len(nx.shortest_path(G, ego_token, targets[0])) if targets else 0
-    
-    G_counter = G.copy()
-    for u, v, data in list(G_counter.edges(data=True)):
-        if u == ego_token and intent_data.get(u, {}).get("most_common_intent") == "braking":
-            G_counter.remove_edge(u, v)
-    
-    new_influence = len(nx.shortest_path(G_counter, ego_token, targets[0])) if targets else 0
-    
-    result = {
-        "ego": ego_token,
-        "original_influence": original_influence,
-        "counterfactual_influence": new_influence,
-        "change": new_influence - original_influence
-    }
-    
-    if output_path:
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        with open(output_path, "wb") as f:
-            pickle.dump(result, f)
-        print("Counterfactual results saved to " + output_path)
-    return result
+
+    results = {}
+    nodes   = list(G.nodes())
+
+    if len(nodes) == 0:
+        print("Graph has no nodes.")
+        return {}
+
+    query_agent      = nodes[0]
+    original_intent  = intent_data.get(
+        query_agent, {}
+    ).get('intent', 'unknown')
+
+    counterfactual_intents = [
+        'moving_straight',
+        'turning_left',
+        'turning_right',
+        'stopping'
+    ]
+
+    print(f"\nQuery agent    : {query_agent[:12]}...")
+    print(f"Original intent: {original_intent}")
+    print()
+
+    for cf_intent in counterfactual_intents:
+        if cf_intent == original_intent:
+            continue
+
+        neighbors   = list(G.successors(query_agent))
+        affected    = len(neighbors)
+        risk_change = round(affected * 0.15, 3)
+        outcome     = 'increased risk' if risk_change > 0.3 else 'safe'
+
+        results[cf_intent] = {
+            'query_agent'    : query_agent,
+            'original_intent': original_intent,
+            'counterfactual' : cf_intent,
+            'affected_agents': affected,
+            'risk_change'    : risk_change,
+            'outcome'        : outcome
+        }
+
+        print(
+            f"  '{original_intent}' → '{cf_intent}' : "
+            f"{affected} agents affected, "
+            f"risk={risk_change}, {outcome}"
+        )
+
+    with open(output_path, 'wb') as f:
+        pickle.dump(results, f)
+
+    print(f"\nCounterfactual results saved: {output_path}")
+    return results

@@ -1,54 +1,67 @@
 import os
 import pickle
 import numpy as np
+from collections import Counter
 
-print("CausalCoop-WM Agent Intent Inference")
-print("==================================================")
+TRAJECTORY_DIR = 'outputs/trajectories'
+OUTPUT_DIR     = 'outputs/causal_graphs'
+INTENT_PATH    = os.path.join(OUTPUT_DIR, 'agent_intents.pkl')
 
-trajectory_dir = "outputs/trajectories"
-output_dir = "outputs/causal_graphs"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Load all trajectories
-trajectory_files = [f for f in os.listdir(trajectory_dir) if f.endswith(".pkl")]
+traj_files = [f for f in os.listdir(TRAJECTORY_DIR) if f.endswith('.pkl')]
+
+if len(traj_files) == 0:
+    print("No trajectory files found. Run 03_extract_trajectories.py first.")
+    exit()
+
+with open(os.path.join(TRAJECTORY_DIR, traj_files[0]), 'rb') as f:
+    trajectories = pickle.load(f)
+
 intent_data = {}
 
-for tf in trajectory_files:
-    with open(os.path.join(trajectory_dir, tf), "rb") as f:
-        traj = pickle.load(f)
-    instance_token = tf.replace("traj_", "").replace(".pkl", "")
-    
-    intents = []
-    for i in range(1, len(traj)):
-        prev_pos = np.array(traj[i-1]["translation"][:2])
-        curr_pos = np.array(traj[i]["translation"][:2])
-        prev_vel = np.linalg.norm(np.array(traj[i-1].get("velocity", [0,0])))
-        curr_vel = np.linalg.norm(np.array(traj[i].get("velocity", [0,0])))
-        
-        speed_change = curr_vel - prev_vel
-        direction_change = np.arctan2(curr_pos[1] - prev_pos[1], curr_pos[0] - prev_pos[0])
-        
-        if speed_change < -0.5:
-            intent = "braking"
-        elif speed_change > 0.5:
-            intent = "accelerating"
-        elif abs(direction_change) > 0.3:
-            intent = "turning"
+for inst_token, traj in trajectories.items():
+    if len(traj) < 2:
+        intent = 'stationary'
+    else:
+        dx_total = traj[-1]['x'] - traj[0]['x']
+        dy_total = traj[-1]['y'] - traj[0]['y']
+        dist     = np.sqrt(dx_total**2 + dy_total**2)
+
+        if dist < 1.0:
+            intent = 'stationary'
+        elif abs(dy_total) < 2.0:
+            intent = 'moving_straight'
+        elif dy_total > 2.0:
+            intent = 'turning_left'
+        elif dy_total < -2.0:
+            intent = 'turning_right'
         else:
-            intent = "cruising"
-        
-        intents.append(intent)
-    
-    intent_data[instance_token] = {
-        "category": traj[0]["category"],
-        "intents": intents,
-        "most_common_intent": max(set(intents), key=intents.count) if intents else "unknown"
+            intent = 'stopping'
+
+    intent_data[inst_token] = {
+        'intent'  : intent,
+        'category': traj[0]['category'],
+        'frames'  : len(traj)
     }
 
-with open(os.path.join(output_dir, "agent_intents.pkl"), "wb") as f:
+with open(INTENT_PATH, 'wb') as f:
     pickle.dump(intent_data, f)
 
-print("Intent inference completed for " + str(len(intent_data)) + " agents")
-for token, data in list(intent_data.items())[:5]:
-    print("Agent " + token[:8] + " most common intent: " + data["most_common_intent"])
-print("Intents saved to outputs/causal_graphs/agent_intents.pkl")
+print(f"Agent intents saved: {INTENT_PATH}")
+print(f"Total agents       : {len(intent_data)}")
+print()
+
+counts = Counter(v['intent'] for v in intent_data.values())
+print('INTENT DISTRIBUTION:')
+print('-' * 35)
+for intent, count in sorted(counts.items(), key=lambda x: -x[1]):
+    bar = '█' * count
+    print(f"  {intent:<20} {count:>3}  {bar}")
+
+print()
+print('SAMPLE AGENT INTENTS:')
+print(f"{'Token':<12} {'Category':<30} {'Intent':<20} {'Frames'}")
+print('-' * 75)
+for i, (token, data) in enumerate(list(intent_data.items())[:10]):
+    print(f"{token[:10]:<12} {data['category']:<30} {data['intent']:<20} {data['frames']}")

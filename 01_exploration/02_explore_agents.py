@@ -1,28 +1,42 @@
-import os
 from nuscenes.nuscenes import NuScenes
+from collections import Counter
 
-print("CausalCoop-WM Agent Exploration")
-print("==================================================")
+DATAROOT = 'D:/nuscenes_project/data/nuscenes'
 
-data_root = r"D:\nuscenes_project\data\nuscenes"
-version = "v1.0-mini"
-nusc = NuScenes(version=version, dataroot=data_root, verbose=True)
+nusc = NuScenes(version='v1.0-mini', dataroot=DATAROOT, verbose=False)
 
-scene_index = 0
-scene = nusc.scene[scene_index]
-print("Exploring scene: " + scene["name"])
+my_scene = nusc.scene[0]
+print(f"Scene      : {my_scene['name']}")
+print(f"Description: {my_scene['description']}")
+print(f"Frames     : {my_scene['nbr_samples']}")
+print()
 
-sample_token = scene["first_sample_token"]
-sample = nusc.get("sample", sample_token)
+sample_token   = my_scene['first_sample_token']
+frame_count    = 0
+all_categories = []
 
-print("Number of agents in this sample: " + str(len(sample["anns"])))
+print(f"{'Frame':<8} {'Timestamp':<22} {'Agents':<10} {'Categories'}")
+print('-' * 70)
 
-for i, ann_token in enumerate(sample["anns"][:10]):
-    ann = nusc.get("sample_annotation", ann_token)
-    print("Agent " + str(i) + ":")
-    print("   Category: " + ann["category_name"])
-    print("   Translation: " + str(ann["translation"]))
-    print("   Size: " + str(ann["size"]))
-    print("   Velocity: " + str(ann.get("velocity", "N/A")))
+while sample_token:
+    sample      = nusc.get('sample', sample_token)
+    annotations = sample['anns']
 
-print("Agent exploration completed for first 10 annotations.")
+    cats = []
+    for ann_token in annotations:
+        ann = nusc.get('sample_annotation', ann_token)
+        cats.append(ann['category_name'].split('.')[1])
+        all_categories.append(ann['category_name'])
+
+    cat_summary = ', '.join(sorted(set(cats)))
+    print(f"{frame_count:<8} {sample['timestamp']:<22} {len(annotations):<10} {cat_summary}")
+
+    frame_count  += 1
+    sample_token  = sample['next']
+
+print()
+print('AGENT CATEGORY BREAKDOWN:')
+print('-' * 40)
+counts = Counter(all_categories)
+for cat, count in sorted(counts.items(), key=lambda x: -x[1]):
+    print(f"  {cat:<40} {count:>5} instances")

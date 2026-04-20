@@ -1,40 +1,136 @@
 import os
-import torch
+import pickle
 import numpy as np
-from nuscenes.nuscenes import NuScenes
 
-print("CausalCoop-WM Corner Case Evaluation")
-print("==================================================")
+TRAJECTORY_DIR = 'outputs/trajectories'
+OUTPUT_DIR     = 'outputs/evaluation'
 
-data_root = r"D:\nuscenes_project\data\nuscenes"
-version = "v1.0-mini"
-nusc = NuScenes(version=version, dataroot=data_root, verbose=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-output_dir = "outputs/evaluation"
-os.makedirs(output_dir, exist_ok=True)
+traj_files = [
+    f for f in os.listdir(TRAJECTORY_DIR)
+    if f.endswith('.pkl')
+]
 
-scene_index = 0
-scene = nusc.scene[scene_index]
-sample_token = scene["first_sample_token"]
-sample = nusc.get("sample", sample_token)
+if len(traj_files) == 0:
+    print("No trajectory files found.")
+    exit()
 
-# Detect corner cases (e.g. close proximity agents)
-corner_cases = 0
-for ann_token in sample["anns"][:20]:
-    ann = nusc.get("sample_annotation", ann_token)
-    dist_to_ego = np.linalg.norm(np.array(ann["translation"]) - np.array([0, 0, 0]))
-    if dist_to_ego < 8.0 and ann["category_name"].startswith("vehicle"):
-        corner_cases += 1
-        print("Corner case detected: " + ann["category_name"] + " at " + str(round(dist_to_ego, 2)) + "m")
+with open(os.path.join(TRAJECTORY_DIR, traj_files[0]), 'rb') as f:
+    trajectories = pickle.load(f)
 
-results = {
-    "corner_cases_detected": corner_cases,
-    "total_agents_checked": min(20, len(sample["anns"])),
-    "corner_case_rate": corner_cases / max(1, min(20, len(sample["anns"])))
-}
 
-torch.save(results, os.path.join(output_dir, "corner_case_results.pt"))
-print("Corner cases detected: " + str(corner_cases))
-print("Corner case rate: " + str(round(results["corner_case_rate"], 4)))
-print("Corner case evaluation saved to outputs/evaluation/corner_case_results.pt")
-print("Corner case evaluation completed.")
+def detect_corner_cases(trajectories, speed_thresh=5.0,
+                        acc_thresh=2.0, prox_thresh=5.0):
+    """
+    Detect corner cases in trajectories:
+    - High speed agents
+    - High acceleration agents
+    - Near-collision events (agents very close)
+    """
+    corner_cases = []
+    agents       = list(trajectories.keys())
+
+    for inst_token, traj in trajectories.items():
+        cat = traj[0]['category']
+
+        if len(traj) < 3:
+            continue
+
+        positions = np.array([[p['x'], p['y']] for p in traj])
+        times     = np.array([p['timestamp'] for p in traj]) / 1e6
+
+        diffs  = np.diff(positions, axis=0)
+        dt     = np.diff(times)
+        dt     = np.where(dt > 0, dt, 1e-6)
+
+        speeds = np.sqrt(np.sum(diffs ** 2, axis=1)) / dt
+        accels = np.abs(np.diff(speeds)) / dt[1:]
+
+        max_speed = float(np.max(speeds))
+        max_accel = float(np.max(accels)) if len(accels) > 0 else 0.0
+
+        if max_speed > speed_thresh:
+            corner_cases.append({
+                'type'    : 'high_speed',
+                'instance': inst_token,
+                'category': cat,
+                'value'   : max_speed,
+                'unit'    : 'm/s'
+            })
+
+        if max_accel > acc_thresh:
+            corner_cases.append({
+                'type'    : 'high_acceleration',
+                'instance': inst_token,
+                'category': cat,
+                'value'   : max_accel,
+                'unit'    : 'm/s²'
+            })
+
+    for i in range(len(agents)):
+        for j in range(i + 1, len(agents)):
+            traj_i  = trajectories[agents[i]]
+            traj_j  = trajectories[agents[j]]
+            min_len = min(len(traj_i), len(traj_j))
+
+            if min_len == 0:
+                continue
+
+            for k in range(min_len):
+                dx = traj_i[k]['x'] - traj_j[k]['x']
+                dy = traj_i[k]['y'] - traj_j[k]['y']
+                dist = np.sqrt(dx**2 + dy**2)
+
+                if dist < prox_thresh:
+                    corner_cases.append({
+                        'type'     : 'near_collision',
+                        'agent_1'  : agents[i][:8],
+                        'agent_2'  : agents[j][:8],
+                        'category1': trajectories[agents[i]][0]['category'],
+                        'category2': trajectories[agents[j]][0]['category'],
+                        'value'    : float(dist),
+                        'unit'     : 'm',
+                        'frame'    : k
+                    })
+                    break
+
+    return corner_cases
+
+
+corner_cases = detect_corner_cases(trajectories)
+
+print(f"Total corner cases detected: {len(corner_cases)}")
+print()
+
+from collections import Counter
+types = Counter(cc['type'] for cc in corner_cases)
+
+print('CORNER CASE TYPES:')
+print('-' * 40)
+for cc_type, count in types.items():
+    print(f"  {cc_type:<25} {count}")
+
+print()
+print('CORNER CASE DETAILS:')
+print('-' * 65)
+
+for cc in corner_cases[:10]:
+    if cc['type'] == 'near_collision':
+        print(
+            f"  [{cc['type']}] "
+            f"{cc['agent_1']} ↔ {cc['agent_2']} "
+            f"dist={cc['value']:.2f}m at frame {cc['frame']}"
+        )
+    else:
+        print(
+            f"  [{cc['type']}] "
+            f"{cc['instance'][:8]}... "
+            f"{cc['category'].split('.')[-1]} "
+            f"= {cc['value']:.2f} {cc['unit']}"
+        )
+
+out_path = os.path.join(OUTPUT_DIR, 'corner_cases.pkl')
+with open(out_path, 'wb') as f:
+    pickle.dump(corner_cases, f)
+print(f"\nCorner cases saved: {out_path}")

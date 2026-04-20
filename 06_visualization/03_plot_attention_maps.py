@@ -1,35 +1,56 @@
 import os
 import torch
+import numpy as np
 import matplotlib.pyplot as plt
 
-print("CausalCoop-WM Plot Attention Maps")
-print("==================================================")
+ATTN_PATH  = 'outputs/v2x_cooperative/attention_weights.pt'
+OUTPUT_DIR = 'outputs/figures'
 
-v2x_dir = "outputs/v2x_cooperative"
-output_dir = "outputs/figures"
-os.makedirs(output_dir, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-fused_path = os.path.join(v2x_dir, "fused_belief.pt")
+if not os.path.exists(ATTN_PATH):
+    print("Attention weights not found.")
+    print("Run 04_v2x_cooperative/03_belief_fusion.py first.")
+    exit()
 
-if os.path.exists(fused_path):
-    fused_belief = torch.load(fused_path)
-    
-    # Simulate attention map (placeholder for future transformer attention)
-    attention_map = torch.softmax(fused_belief[:64].unsqueeze(0), dim=1).squeeze(0).reshape(8, 8).cpu().numpy()
-    
-    plt.figure(figsize=(8, 8))
-    plt.imshow(attention_map, cmap="viridis")
-    plt.colorbar(label="Attention Weight")
-    plt.title("Simulated Attention Map (Belief Fusion)")
-    plt.xlabel("Latent Dimension X")
-    plt.ylabel("Latent Dimension Y")
-    
-    out_path = os.path.join(output_dir, "attention_map_plot.png")
-    plt.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.show()
-    
-    print("Attention map plot saved to " + out_path)
+attn = torch.load(ATTN_PATH, weights_only=False)
+print(f"Attention weights shape: {attn.shape}")
+
+if attn.dim() == 3:
+    attn_np = attn[0].detach().numpy()
+elif attn.dim() == 2:
+    attn_np = attn.detach().numpy()
 else:
-    print("Fused belief not found. Run V2X scripts first.")
+    attn_np = attn.squeeze().detach().numpy()
 
-print("Attention map plotting completed.")
+fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+fig.suptitle('V2X Attention Weights — Agent Belief Fusion', fontsize=13)
+
+im = axes[0].imshow(attn_np, cmap='Blues', aspect='auto',
+                    vmin=0, vmax=attn_np.max())
+plt.colorbar(im, ax=axes[0])
+axes[0].set_title('Attention Heatmap\n(rows=query, cols=key)')
+axes[0].set_xlabel('Key agent')
+axes[0].set_ylabel('Query agent')
+n = attn_np.shape[0]
+axes[0].set_xticks(range(n))
+axes[0].set_yticks(range(n))
+axes[0].set_xticklabels([f'A{i}' for i in range(n)])
+axes[0].set_yticklabels([f'A{i}' for i in range(n)])
+
+row_sums = attn_np.sum(axis=1)
+axes[1].bar(range(len(row_sums)), row_sums,
+            color='steelblue', alpha=0.8)
+axes[1].set_title('Attention Sum per Query Agent')
+axes[1].set_xlabel('Query agent')
+axes[1].set_ylabel('Sum of attention weights')
+axes[1].set_xticks(range(len(row_sums)))
+axes[1].set_xticklabels([f'A{i}' for i in range(len(row_sums))])
+axes[1].grid(True, alpha=0.3, axis='y')
+
+plt.tight_layout()
+out_path = os.path.join(OUTPUT_DIR, 'attention_weights.png')
+plt.savefig(out_path, dpi=150, bbox_inches='tight')
+print(f"Saved: {out_path}")
+plt.show()
+plt.close()

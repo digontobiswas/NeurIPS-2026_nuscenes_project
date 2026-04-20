@@ -1,19 +1,30 @@
-import os
 from nuscenes.nuscenes import NuScenes
 
-print("CausalCoop-WM Sanity Check")
-print("==================================================")
+DATAROOT = 'D:/nuscenes_project/data/nuscenes'
+VERSION  = 'v1.0-mini'
 
-data_root = r"D:\nuscenes_project\data\nuscenes"
-version = "v1.0-mini"
+nusc = NuScenes(version=VERSION, dataroot=DATAROOT, verbose=True)
 
-if not os.path.exists(data_root):
-    print("Data root not found. Please download nuScenes mini and place in data_nuscenes")
-else:
-    nusc = NuScenes(version=version, dataroot=data_root, verbose=True)
-    print("NuScenes loaded successfully")
-    print("Number of scenes: " + str(len(nusc.scene)))
-    print("Number of samples: " + str(len(nusc.sample)))
-    print("Number of annotations: " + str(len(nusc.sample_annotation)))
-    print("Dataset version: " + version)
-    print("Sanity check completed. Dataset is ready.")
+print('=' * 50)
+print('DATASET SUMMARY')
+print('=' * 50)
+print(f'Version       : {VERSION}')
+print(f'Scenes        : {len(nusc.scene)}')
+print(f'Samples       : {len(nusc.sample)}')
+print(f'Annotations   : {len(nusc.sample_annotation)}')
+print(f'Categories    : {len(nusc.category)}')
+print(f'Instances     : {len(nusc.instance)}')
+print(f'Sensors       : {len(nusc.sensor)}')
+print('=' * 50)
+
+print('\nALL SCENES:')
+print(f"{'#':<5} {'Name':<15} {'Frames':<10} {'Description'}")
+print('-' * 70)
+for i, scene in enumerate(nusc.scene):
+    print(f"{i:<5} {scene['name']:<15} {scene['nbr_samples']:<10} {scene['description'][:40]}")
+
+print('\nALL CATEGORIES:')
+print(f"{'#':<5} {'Category Name'}")
+print('-' * 40)
+for i, cat in enumerate(nusc.category):
+    print(f"{i:<5} {cat['name']}")
